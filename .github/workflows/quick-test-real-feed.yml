@@ -73,7 +73,7 @@ jobs:
           FEEDS_PATH="feeds.conf.default"
           [ -f feeds.conf ] && FEEDS_PATH="feeds.conf"
 
-          if ! grep -q "miaomiaowu" "$FEEDS_PATH"; then
+          if ! grep -q "substore" "$FEEDS_PATH"; then
             [ -z "$(tail -c 1 "$FEEDS_PATH")" ] || echo "" >>"$FEEDS_PATH"
             echo "src-git substore https://github.com/xiaohai77/OpenWrt-SubStore.git;main" >>"$FEEDS_PATH"
           fi
