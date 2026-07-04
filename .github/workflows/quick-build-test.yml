@@ -14,8 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       sdk_url:
-        description: "OpenWrt/ImmortalWrt SDK 下载直链 (.tar.zst 或 .tar.xz)"
-        required: true
+        description: "OpenWrt/ImmortalWrt SDK 下载直链 (.tar.zst 或 .tar.xz)，默认是 qualcommax/ipq807x aarch64_cortex-a53"
+        required: false
+        default: "https://downloads.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
         type: string
       package_name:
         description: "要编译的包名 (miaomiaowu / luci-app-miaomiaowu / mmw-test)"
@@ -37,9 +38,13 @@ jobs:
       - name: 下载并解压 SDK
         run: |
           set -e
-          wget -q -O sdk.tar.xxx "${{ inputs.sdk_url }}"
+          echo "使用的 SDK 链接: ${{ inputs.sdk_url }}"
+          echo "---- 先探测一下这个链接返回什么 ----"
+          curl -sSL -o /dev/null -w "HTTP状态码: %{http_code}\n最终跳转到: %{url_effective}\n" "${{ inputs.sdk_url }}" || echo "curl 探测本身就失败了，多半是链接拼错或域名解析不了"
+          wget --tries=3 --timeout=30 -O sdk.tar.xxx "${{ inputs.sdk_url }}"
           mkdir -p sdk
           FILE="sdk.tar.xxx"
+          file "$FILE"
           if file "$FILE" | grep -q Zstandard; then
             tar --use-compress-program=unzstd -xf "$FILE" -C sdk --strip-components=1
           else
