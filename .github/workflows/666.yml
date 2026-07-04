@@ -1,4 +1,4 @@
-Name: Quick Test
+name: Quick Test
 
 # 跟真实固件仓库用一模一样的 feed 注册方式，只是不走完整固件编译（那个要两小时），
 # 而是用官方 SDK 只编你的包，几分钟出结果。
