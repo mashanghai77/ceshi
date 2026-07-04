@@ -10,7 +10,7 @@ on:
       package_name:
         description: "要编译的包名"
         required: false
-        default: "miaomiaowu"
+        default: "substore"
         type: string
       sdk_url:
         description: "留空则自动用内置候选列表"
