@@ -1,4 +1,4 @@
-name: Test Miaomiaowu Feed
+name: Test Miaomiaowu Feed (ImmortalWrt 25.05)
 
 on:
   workflow_dispatch:
@@ -8,37 +8,16 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Clone OpenWrt
+      - name: Clone ImmortalWrt 25.05
         run: |
-          git clone --depth=1 https://github.com/openwrt/openwrt.git
-          cd openwrt
-
-      - name: Add Feed
-        run: |
-          cd openwrt
+          git clone --depth=1 -b openwrt-25.05 https://github.com/immortalwrt/immortalwrt.git
+          cd immortalwrt
 
           echo "src-git miaomiaowu https://github.com/xiaohai77/OpenWrt-MMW.git;main" >> feeds.conf.default
 
-      - name: Update Feed
-        run: |
-          cd openwrt
-
           ./scripts/feeds update miaomiaowu
-
-      - name: Install Feed
-        run: |
-          cd openwrt
-
           ./scripts/feeds install -a -p miaomiaowu
 
-      - name: Verify
-        run: |
-          cd openwrt
-
-          echo "===== package/feeds ====="
           find package/feeds
 
           test -d package/feeds/miaomiaowu/luci-app-miaomiaowu
