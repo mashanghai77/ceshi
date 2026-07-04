@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       sdk_url:
-        description: "OpenWrt/ImmortalWrt SDK 下载直链 (.tar.zst 或 .tar.xz)，默认是 qualcommax/ipq807x aarch64_cortex-a53"
+        description: "OpenWrt SDK 下载直链，留空则用下面内置的默认候选列表自动尝试"
         required: false
-        default: "https://downloads.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+        default: ""
         type: string
       package_name:
         description: "要编译的包名 (miaomiaowu / luci-app-miaomiaowu / mmw-test)"
@@ -35,13 +35,36 @@ jobs:
             gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
             python3-setuptools rsync swig unzip zlib1g-dev file wget zstd
 
-      - name: 下载并解压 SDK
+      - name: 下载并解压 SDK（官方站失败自动换镜像）
         run: |
           set -e
-          echo "使用的 SDK 链接: ${{ inputs.sdk_url }}"
-          echo "---- 先探测一下这个链接返回什么 ----"
-          curl -sSL -o /dev/null -w "HTTP状态码: %{http_code}\n最终跳转到: %{url_effective}\n" "${{ inputs.sdk_url }}" || echo "curl 探测本身就失败了，多半是链接拼错或域名解析不了"
-          wget --tries=3 --timeout=30 -O sdk.tar.xxx "${{ inputs.sdk_url }}"
+          if [ -n "${{ inputs.sdk_url }}" ]; then
+            CANDIDATES=("${{ inputs.sdk_url }}")
+          else
+            CANDIDATES=(
+              "https://downloads.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://ftp.gwdg.de/pub/linux/openwrt/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://mirror-03.infra.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+            )
+          fi
+
+          OK=0
+          for URL in "${CANDIDATES[@]}"; do
+            echo "尝试: $URL"
+            CODE=$(curl -sSL -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            echo "HTTP状态码: $CODE"
+            if [ "$CODE" = "200" ]; then
+              wget --tries=3 --timeout=30 -O sdk.tar.xxx "$URL"
+              OK=1
+              break
+            fi
+          done
+
+          if [ "$OK" -ne 1 ]; then
+            echo "所有候选链接都失败了，把上面每个的状态码发出来，我再帮你查"
+            exit 1
+          fi
+
           mkdir -p sdk
           FILE="sdk.tar.xxx"
           file "$FILE"
