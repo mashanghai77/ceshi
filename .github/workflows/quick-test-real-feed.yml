@@ -75,7 +75,7 @@ jobs:
 
           if ! grep -q "miaomiaowu" "$FEEDS_PATH"; then
             [ -z "$(tail -c 1 "$FEEDS_PATH")" ] || echo "" >>"$FEEDS_PATH"
-            echo "src-git miaomiaowu https://github.com/xiaohai77/OpenWrt-MMW.git;main" >>"$FEEDS_PATH"
+            echo "src-git substore https://github.com/xiaohai77/OpenWrt-SubStore.git;main" >>"$FEEDS_PATH"
           fi
 
           cat "$FEEDS_PATH"
@@ -94,7 +94,7 @@ jobs:
       - name: 只编译目标包
         run: |
           cd sdk
-          make package/feeds/miaomiaowu/${{ inputs.package_name }}/{clean,download,prepare,compile} V=s -j$(nproc)
+          make package/feeds/substore/${{ inputs.package_name }}/{clean,download,prepare,compile} V=s -j$(nproc)
 
       - name: 打包产物路径打印
         run: |
