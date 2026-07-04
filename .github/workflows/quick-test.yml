@@ -1,0 +1,116 @@
+name: Quick Test (real feed logic, SDK only)
+
+# 跟真实固件仓库用一模一样的 feed 注册方式，只是不走完整固件编译（那个要两小时），
+# 而是用官方 SDK 只编你的包，几分钟出结果。
+# 这里测试通过 ≈ 大概率真实固件里也能编过（前提是 target/subtarget 一致）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: "要编译的包名"
+        required: false
+        default: "luci-app-substore"
+        type: string
+      sdk_url:
+        description: "留空则自动用内置候选列表"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget zstd
+
+      - name: 下载并解压 SDK（官方站失败自动换镜像）
+        run: |
+          set -e
+          if [ -n "${{ inputs.sdk_url }}" ]; then
+            CANDIDATES=("${{ inputs.sdk_url }}")
+          else
+            CANDIDATES=(
+              "https://downloads.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://ftp.gwdg.de/pub/linux/openwrt/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://mirror-03.infra.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+            )
+          fi
+
+          OK=0
+          for URL in "${CANDIDATES[@]}"; do
+            echo "尝试: $URL"
+            CODE=$(curl -sSL -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            echo "HTTP状态码: $CODE"
+            if [ "$CODE" = "200" ]; then
+              wget --tries=3 --timeout=30 -O sdk.tar.xxx "$URL"
+              OK=1
+              break
+            fi
+          done
+
+          if [ "$OK" -ne 1 ]; then
+            echo "所有候选链接都失败了"
+            exit 1
+          fi
+
+          mkdir -p sdk
+          if file sdk.tar.xxx | grep -q Zstandard; then
+            tar --use-compress-program=unzstd -xf sdk.tar.xxx -C sdk --strip-components=1
+          else
+            tar -xf sdk.tar.xxx -C sdk --strip-components=1
+          fi
+
+      - name: 用和真实仓库一样的方式注册 feed
+        run: |
+          cd sdk
+          # ---- 跟你真实固件仓库 update_feeds() 里的写法完全一致 ----
+          FEEDS_PATH="feeds.conf.default"
+          [ -f feeds.conf ] && FEEDS_PATH="feeds.conf"
+
+          if ! grep -q "substore" "$FEEDS_PATH"; then
+            [ -z "$(tail -c 1 "$FEEDS_PATH")" ] || echo "" >>"$FEEDS_PATH"
+            echo "src-git substore https://github.com/xiaohai77/OpenWrt-SubStore.git;main" >>"$FEEDS_PATH"
+          fi
+
+          cat "$FEEDS_PATH"
+
+      - name: 更新并安装 feeds
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: defconfig
+        run: |
+          cd sdk
+          make defconfig
+
+      - name: 只编译目标包
+        run: |
+          cd sdk
+          # feed 名(上面注册时用的 substore)和包名(Makefile 里的 PKG_NAME，
+          # 也就是 luci-app-substore)是两个独立的东西，make target 路径要用
+          # 真正的包名，不能拿 feed 名代替——之前失败就是这里两个用混了。
+          make package/feeds/substore/${{ inputs.package_name }}/{clean,download,prepare,compile} V=s -j$(nproc)
+
+      - name: 打包产物路径打印
+        run: |
+          cd sdk
+          echo "---- 生成的 ipk/apk ----"
+          find bin/packages -iname "*${{ inputs.package_name }}*" || echo "没找到产物，看上面日志报错"
+
+      - name: 上传编译产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-result-${{ inputs.package_name }}
+          path: |
+            sdk/bin/packages/**/*${{ inputs.package_name }}*
+            sdk/logs/**
+          if-no-files-found: warn
