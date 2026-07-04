@@ -1,0 +1,133 @@
+name: Quick gemini
+
+# 跟真实固件仓库用一模一样的 feed 注册方式，只是不走完整固件编译（那个要两小时），
+# 而是用官方 SDK 只编你的包，几分钟出结果。
+# 这里测试通过 ≈ 大概率真实固件里也能编过（前提是 target/subtarget 一致）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: "要编译的包名"
+        required: false
+        default: "luci-app-substore"
+        type: string
+      sdk_url:
+        description: "留空则自动用内置候选列表"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget zstd
+
+      - name: 下载并解压 SDK（多镜像健全轮询机制）
+        run: |
+          set -e
+          if [ -n "${{ inputs.sdk_url }}" ]; then
+            CANDIDATES=("${{ inputs.sdk_url }}")
+          else
+            CANDIDATES=(
+              "https://downloads.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://mirror-01.infra.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://mirror-02.infra.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://mirror-03.infra.openwrt.org/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+              "https://ftp.gwdg.de/pub/linux/openwrt/snapshots/targets/qualcommax/ipq807x/openwrt-sdk-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+            )
+          fi
+
+          OK=0
+          for URL in "${CANDIDATES[@]}"; do
+            echo "----------------------------------------------------"
+            echo "正在尝试镜像源: $URL"
+            
+            # 1. 测活：给 curl 加上连接和传输超时，防止测活时被垃圾节点卡死
+            CODE=$(curl -sSL --connect-timeout 5 -m 10 -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            echo "HTTP 状态码: $CODE"
+            
+            if [ "$CODE" = "200" ]; then
+              echo "节点可用，开始下载..."
+              # 2. 真实下载：如果 wget 中途断开或者卡住，它会返回非0码，逻辑会继续走到下一个镜像，实现真正的轮询
+              if wget --tries=2 --connect-timeout=10 --timeout=30 -O sdk.tar.xxx "$URL"; then
+                echo "SDK 下载成功！"
+                OK=1
+                break
+              else
+                echo "警告: 该镜像源下载中途失败/超时，自动切换至下一个备用源..."
+              fi
+            else
+              echo "节点不可用，跳过..."
+            fi
+          done
+
+          if [ "$OK" -ne 1 ]; then
+            echo "错误: 所有内置和备用镜像源均无法连接或下载失败！"
+            exit 1
+          fi
+
+          mkdir -p sdk
+          if file sdk.tar.xxx | grep -q Zstandard; then
+            tar --use-compress-program=unzstd -xf sdk.tar.xxx -C sdk --strip-components=1
+          else
+            tar -xf sdk.tar.xxx -C sdk --strip-components=1
+          fi
+
+      - name: 用和真实仓库一样的方式注册 feed
+        run: |
+          cd sdk
+          # ---- 跟你真实固件仓库 update_feeds() 里的写法完全一致 ----
+          FEEDS_PATH="feeds.conf.default"
+          [ -f feeds.conf ] && FEEDS_PATH="feeds.conf"
+
+          if ! grep -q "substore" "$FEEDS_PATH"; then
+            [ -z "$(tail -c 1 "$FEEDS_PATH")" ] || echo "" >>"$FEEDS_PATH"
+            echo "src-git substore https://github.com/xiaohai77/OpenWrt-SubStore.git;main" >>"$FEEDS_PATH"
+          fi
+
+          cat "$FEEDS_PATH"
+
+      - name: 更新并安装 feeds
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: defconfig
+        run: |
+          cd sdk
+          make defconfig
+
+      - name: 只编译目标包
+        run: |
+          cd sdk
+          # 核心修正：注入全局 CURL 参数。
+          # -m 60: 单个依赖包源码最长下载 60 秒
+          # --speed-limit 1000 --speed-time 15: 如果下载速度连续 15 秒低于 1KB/s，直接掐断报错换源，防止刷屏僵死
+          export CURL_OPTIONS="-m 60 --speed-limit 1000 --speed-time 15"
+          
+          make package/feeds/substore/${{ inputs.package_name }}/{clean,download,prepare,compile} V=s -j$(nproc)
+
+      - name: 打包产物路径打印
+        run: |
+          cd sdk
+          echo "---- 生成的 ipk/apk ----"
+          find bin/packages -iname "*${{ inputs.package_name }}*" || echo "没找到产物，看上面日志报错"
+
+      - name: 上传编译产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-result-${{ inputs.package_name }}
+          path: |
+            sdk/bin/packages/**/*${{ inputs.package_name }}*
+            sdk/logs/**
+          if-no-files-found: warn
+
