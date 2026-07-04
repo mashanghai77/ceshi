@@ -1,4 +1,4 @@
-name: Quick gemini
+Name: Quick Test
 
 # 跟真实固件仓库用一模一样的 feed 注册方式，只是不走完整固件编译（那个要两小时），
 # 而是用官方 SDK 只编你的包，几分钟出结果。
@@ -49,13 +49,11 @@ jobs:
             echo "----------------------------------------------------"
             echo "正在尝试镜像源: $URL"
             
-            # 1. 测活：给 curl 加上连接和传输超时，防止测活时被垃圾节点卡死
             CODE=$(curl -sSL --connect-timeout 5 -m 10 -o /dev/null -w "%{http_code}" "$URL" || echo "000")
             echo "HTTP 状态码: $CODE"
             
             if [ "$CODE" = "200" ]; then
               echo "节点可用，开始下载..."
-              # 2. 真实下载：如果 wget 中途断开或者卡住，它会返回非0码，逻辑会继续走到下一个镜像，实现真正的轮询
               if wget --tries=2 --connect-timeout=10 --timeout=30 -O sdk.tar.xxx "$URL"; then
                 echo "SDK 下载成功！"
                 OK=1
@@ -108,11 +106,12 @@ jobs:
       - name: 只编译目标包
         run: |
           cd sdk
-          # 核心修正：注入全局 CURL 参数。
-          # -m 60: 单个依赖包源码最长下载 60 秒
-          # --speed-limit 1000 --speed-time 15: 如果下载速度连续 15 秒低于 1KB/s，直接掐断报错换源，防止刷屏僵死
-          export CURL_OPTIONS="-m 60 --speed-limit 1000 --speed-time 15"
           
+          # 🛠️ 核心修复：强行移除引发新版 APK 格式校验失败的旧版 wget 源码
+          # 这能防止构建系统在打包 wget-ssl 时因为老的 "PROVIDES" 别名语法报错
+          rm -rf package/feeds/packages/wget
+          
+          export CURL_OPTIONS="-m 60 --speed-limit 1000 --speed-time 15"
           make package/feeds/substore/${{ inputs.package_name }}/{clean,download,prepare,compile} V=s -j$(nproc)
 
       - name: 打包产物路径打印
@@ -130,4 +129,3 @@ jobs:
             sdk/bin/packages/**/*${{ inputs.package_name }}*
             sdk/logs/**
           if-no-files-found: warn
-
